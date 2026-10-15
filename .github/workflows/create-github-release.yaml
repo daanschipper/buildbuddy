@@ -4,10 +4,11 @@ name: "Create Github Release"
 # unexpected behavior in action-automatic-releases when manually setting an
 # automatic_release_tag.
 # To manually trigger this, you can force push a version tag starting with `v`.
+#
+# Disabled in this fork: its v<upstream>-clickhouse.<n> tags matched the upstream
+# "v*" trigger, so every image tag push also started an upstream-style release.
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
 
 jobs:
   create-release:
