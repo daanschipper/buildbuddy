@@ -1,0 +1,46 @@
+name: "Server image"
+
+# Builds //server/cmd/buildbuddy_clickhouse:buildbuddy_image and pushes it to
+# ghcr.io/daanschipper/buildbuddy:<tag>. Triggered by a v<upstream>-clickhouse.<n> tag;
+# workflow_dispatch re-pushes the checked-out ref under the given tag.
+on:
+  push:
+    tags:
+      - "v*-clickhouse.*"
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag to push (defaults to the checked-out tag or branch name)."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          # Tags are needed for the version the running binary reports (workspace_status.sh).
+          fetch-depth: 0
+
+      - name: Setup Bazel Go module cache
+        uses: ./.github/actions/setup-bazel-go-mod-cache
+
+      - name: Login to GitHub Container Registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      # --bes_backend= overrides the anonymous build-event upload to buildbuddy.io that
+      # .bazelrc enables by default.
+      - name: Build and push
+        run: |
+          bazelisk run \
+            --config=release \
+            --bes_backend= \
+            --bes_results_url= \
+            --//deployment:image_tag="${{ inputs.image_tag || github.ref_name }}" \
+            //server/cmd/buildbuddy_clickhouse:push
