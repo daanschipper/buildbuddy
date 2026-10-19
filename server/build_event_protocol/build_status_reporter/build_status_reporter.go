@@ -13,6 +13,7 @@ import (
 	"github.com/buildbuddy-io/buildbuddy/server/endpoint_urls/build_buddy_url"
 	"github.com/buildbuddy-io/buildbuddy/server/environment"
 	"github.com/buildbuddy-io/buildbuddy/server/interfaces"
+	"github.com/buildbuddy-io/buildbuddy/server/util/authutil"
 	"github.com/buildbuddy-io/buildbuddy/server/util/log"
 	"github.com/buildbuddy-io/buildbuddy/server/util/timeutil"
 
@@ -141,25 +142,30 @@ func (r *BuildStatusReporter) flushPayloadsIfMetadataLoaded(ctx context.Context)
 		return
 	}
 
-	// If there is no authenticated user (e.g. a self-hosted deployment with no
-	// auth configured), we can still report commit statuses when a hard-coded
-	// github.access_token is configured. Only bail out when status reporting is
-	// not unconditionally enabled, so the webhook/workflow path keeps its group
-	// attribution while the access_token path keeps working. See #12302.
-	userInfo, err := r.env.GetAuthenticator().AuthenticatedUser(ctx)
+	// Checked before the auth lookup so invocations that never report statuses
+	// cannot produce auth warnings.
+	if !r.buildEventAccumulator.MetadataIsLoaded() || r.buildEventAccumulator.DisableCommitStatusReporting() {
+		return
+	}
+
+	auth := r.env.GetAuthenticator()
+	userInfo, err := auth.AuthenticatedUser(ctx)
 	var groupID string
-	if err == nil {
+	switch {
+	case err == nil:
 		groupID = userInfo.GetGroupID()
-	} else if !github.AlwaysEnableStatusReporting() {
+	case github.AlwaysEnableStatusReporting():
+		// A hard-coded github.access_token reports without group attribution. See #12302.
+	case authutil.IsAnonymousUserError(err) && auth.AnonymousUsageEnabled(ctx):
+		// Expected for anonymous deployments without a token; not a misconfiguration.
+		log.CtxDebugf(ctx, "Not reporting GitHub status for anonymous invocation: %s", err)
+		return
+	default:
 		log.CtxWarningf(ctx, "Failed to get authenticated user: %s", err)
 		return
 	}
 
-	// Don't report statuses if we don't yet have the metadata, it's explicitly
-	// disabled in build metadata, or it's not enabled for this repo.
-	if !r.buildEventAccumulator.MetadataIsLoaded() ||
-		r.buildEventAccumulator.DisableCommitStatusReporting() ||
-		!r.isStatusReportingEnabled(ctx, groupID, r.buildEventAccumulator.Invocation().GetRepoUrl()) {
+	if !r.isStatusReportingEnabled(ctx, groupID, r.buildEventAccumulator.Invocation().GetRepoUrl()) {
 		return
 	}
 
